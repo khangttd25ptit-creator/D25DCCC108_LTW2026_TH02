@@ -1,16 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 import { TIME_PER_QUESTION } from '../data';
-import { calcPoints, calcTotal } from '../utils';
+import { calcPoints, calcTotal, getStars } from '../utils';
 import Countdown from '../components/Countdown';
 import TimeBar from '../components/TimeBar';
 import ScorePanel from '../components/ScorePanel';
+import PowerUps from '../components/PowerUps';
 import QuestionCard from '../components/QuestionCard';
 
-const Play = ({ questions, playerName }) => {
+const Play = ({ questions, playerName, onFinishGame }) => {
   const navigate = useNavigate();
 
-  const [gameQuestions] = useState(() =>
+  const [gameQuestions, setGameQuestions] = useState(() =>
     questions.filter((q) => !q.reserve)
   );
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -18,8 +19,15 @@ const Play = ({ questions, playerName }) => {
   const [countdown, setCountdown] = useState(3);
   const [timeLeft, setTimeLeft] = useState(TIME_PER_QUESTION);
   const [selectedIndex, setSelectedIndex] = useState(null);
+  const [focusedIndex, setFocusedIndex] = useState(0);
   const [answers, setAnswers] = useState([]);
   const [lastBonus, setLastBonus] = useState(0);
+
+  const [usedSwap, setUsedSwap] = useState(false);
+  const [usedDouble, setUsedDouble] = useState(false);
+  const [isDoubleActive, setIsDoubleActive] = useState(false);
+  const [usedFreeze, setUsedFreeze] = useState(false);
+  const [isFrozen, setIsFrozen] = useState(false);
 
   const currentQuestion = gameQuestions[currentIndex];
   const score = calcTotal(answers);
@@ -29,7 +37,8 @@ const Play = ({ questions, playerName }) => {
     (chosenIdx) => {
       if (status !== 'answering' || !currentQuestion) return;
       const isCorrect = chosenIdx === currentQuestion.answer;
-      const earned = isCorrect ? calcPoints(currentQuestion, timeLeft) : 0;
+      const basePoints = isCorrect ? calcPoints(currentQuestion, timeLeft) : 0;
+      const earned = isDoubleActive ? basePoints * 2 : basePoints;
 
       setSelectedIndex(chosenIdx);
       setLastBonus(earned);
@@ -37,6 +46,8 @@ const Play = ({ questions, playerName }) => {
         ...prev,
         {
           id: currentQuestion.id,
+          originalId: currentQuestion.originalId || currentQuestion.id,
+          swappedToId: currentQuestion.swappedToId || null,
           chosen: chosenIdx,
           correct: currentQuestion.answer,
           timeLeft,
@@ -46,7 +57,7 @@ const Play = ({ questions, playerName }) => {
       ]);
       setStatus('revealed');
     },
-    [status, currentQuestion, timeLeft]
+    [status, currentQuestion, timeLeft, isDoubleActive]
   );
 
   useEffect(() => {
@@ -62,7 +73,7 @@ const Play = ({ questions, playerName }) => {
   }, [status, countdown]);
 
   useEffect(() => {
-    if (status !== 'answering') return;
+    if (status !== 'answering' || isFrozen) return;
     const interval = setInterval(() => {
       setTimeLeft((prev) => {
         if (prev <= 1) {
@@ -73,7 +84,7 @@ const Play = ({ questions, playerName }) => {
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [status, currentIndex]);
+  }, [status, isFrozen, currentIndex]);
 
   useEffect(() => {
     if (status === 'answering' && timeLeft === 0) {
@@ -88,11 +99,23 @@ const Play = ({ questions, playerName }) => {
         setCurrentIndex((i) => i + 1);
         setTimeLeft(TIME_PER_QUESTION);
         setSelectedIndex(null);
+        setFocusedIndex(0);
         setLastBonus(0);
+        setIsDoubleActive(false);
+        setIsFrozen(false);
         setStatus('answering');
       } else {
         const finalScore = calcTotal(answers);
         const finalCorrect = answers.filter((a) => a.isCorrect).length;
+        const stars = getStars(finalCorrect).stars;
+        onFinishGame({
+          id: Date.now(),
+          name: playerName,
+          score: finalScore,
+          correctCount: finalCorrect,
+          stars,
+          playedAt: new Date().toLocaleString('vi-VN'),
+        });
         navigate('/result', {
           replace: true,
           state: { playerName, answers, score: finalScore, correctCount: finalCorrect },
@@ -100,11 +123,64 @@ const Play = ({ questions, playerName }) => {
       }
     }, 1500);
     return () => clearTimeout(timer);
-  }, [status, currentIndex, gameQuestions.length, answers, playerName, navigate]);
+  }, [status, currentIndex, gameQuestions.length, answers, playerName, onFinishGame, navigate]);
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (status !== 'answering') return;
+      if (e.key === 'ArrowRight') {
+        setFocusedIndex((prev) => (prev % 2 === 0 ? prev + 1 : prev));
+      } else if (e.key === 'ArrowLeft') {
+        setFocusedIndex((prev) => (prev % 2 === 1 ? prev - 1 : prev));
+      } else if (e.key === 'ArrowDown') {
+        setFocusedIndex((prev) => (prev <= 1 ? prev + 2 : prev));
+      } else if (e.key === 'ArrowUp') {
+        setFocusedIndex((prev) => (prev >= 2 ? prev - 2 : prev));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleAnswer(focusedIndex);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [status, focusedIndex, handleAnswer]);
+
+  useEffect(() => {
+    if (status !== 'countdown') {
+      document.title = `Câu ${currentIndex + 1}/15 – đúng ${correctCount} câu`;
+    }
+    return () => {
+      document.title = 'Nhanh như chớp';
+    };
+  }, [status, currentIndex, correctCount]);
 
   if (!playerName.trim()) {
     return <Navigate to="/" replace />;
   }
+
+  const handleSwap = () => {
+    const reserveQ = questions.find((q) => q.reserve && q.level === currentQuestion.level);
+    if (!reserveQ) return;
+    const updated = gameQuestions.map((q, idx) =>
+      idx === currentIndex
+        ? { ...reserveQ, originalId: q.id, swappedToId: reserveQ.id }
+        : q
+    );
+    setGameQuestions(updated);
+    setTimeLeft(TIME_PER_QUESTION);
+    setIsFrozen(false);
+    setUsedSwap(true);
+  };
+
+  const handleDouble = () => {
+    setIsDoubleActive(true);
+    setUsedDouble(true);
+  };
+
+  const handleFreeze = () => {
+    setIsFrozen(true);
+    setUsedFreeze(true);
+  };
 
   if (status === 'countdown') {
     return <Countdown count={countdown} />;
@@ -113,14 +189,24 @@ const Play = ({ questions, playerName }) => {
   return (
     <div>
       <ScorePanel score={score} correctCount={correctCount} lastBonus={lastBonus} />
-      <TimeBar timeLeft={timeLeft} isFrozen={false} />
+      <TimeBar timeLeft={timeLeft} isFrozen={isFrozen} />
+      <PowerUps
+        status={status}
+        usedSwap={usedSwap}
+        usedDouble={usedDouble}
+        isDoubleActive={isDoubleActive}
+        usedFreeze={usedFreeze}
+        onSwap={handleSwap}
+        onDouble={handleDouble}
+        onFreeze={handleFreeze}
+      />
       {currentQuestion && (
         <QuestionCard
           question={currentQuestion}
           currentIndex={currentIndex}
           total={gameQuestions.length}
           status={status}
-          focusedIndex={-1}
+          focusedIndex={focusedIndex}
           selectedIndex={selectedIndex}
           onSelect={handleAnswer}
         />

@@ -42,7 +42,11 @@ const Result = () => {
               key={idx}
               style={{ backgroundColor: item.isCorrect ? '#e8f5e9' : '#ffebee' }}
             >
-              <td>{`Câu ${item.id}`}</td>
+              <td>
+                {item.swappedToId
+                  ? `Câu ${item.originalId} (đổi sang câu ${item.swappedToId})`
+                  : `Câu ${item.id}`}
+              </td>
               <td style={{ textAlign: 'center' }}>
                 {item.chosen !== null ? LETTERS[item.chosen] : '–'}
               </td>

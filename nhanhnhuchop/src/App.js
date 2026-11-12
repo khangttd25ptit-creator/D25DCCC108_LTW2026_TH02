@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import axios from 'axios';
 import './App.css';
@@ -11,11 +11,17 @@ import Questions from './pages/Questions';
 import QuestionDetail from './pages/QuestionDetail';
 import NotFound from './pages/NotFound';
 
+const HISTORY_KEY = 'ltw_chop_history';
+
 const App = () => {
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [playerName, setPlayerName] = useState('');
+  const [history, setHistory] = useState(() => {
+    const saved = localStorage.getItem(HISTORY_KEY);
+    return saved ? JSON.parse(saved) : [];
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -34,19 +40,44 @@ const App = () => {
     return () => controller.abort();
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }, [history]);
+
+  const handleFinishGame = useCallback((record) => {
+    setHistory((prev) => [...prev, record]);
+  }, []);
+
+  const handleDeleteHistory = (id) => {
+    setHistory((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleClearHistory = () => {
+    setHistory([]);
+  };
+
   return (
     <Routes>
       <Route path="/" element={<Layout loading={loading} error={error} />}>
         <Route
           index
-          element={<Home playerName={playerName} setPlayerName={setPlayerName} />}
+          element={<Home playerName={playerName} setPlayerName={setPlayerName} history={history} />}
         />
         <Route
           path="play"
-          element={<Play questions={questions} playerName={playerName} />}
+          element={<Play questions={questions} playerName={playerName} onFinishGame={handleFinishGame} />}
         />
         <Route path="result" element={<Result />} />
-        <Route path="history" element={<History />} />
+        <Route
+          path="history"
+          element={
+            <History
+              history={history}
+              onDelete={handleDeleteHistory}
+              onClear={handleClearHistory}
+            />
+          }
+        />
         <Route path="questions" element={<Questions questions={questions} />} />
         <Route path="questions/:id" element={<QuestionDetail questions={questions} />} />
         <Route path="*" element={<NotFound />} />
